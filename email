@@ -1,324 +1,189 @@
-Good catch 👍 — you’re absolutely right.
-Let’s properly add exception handling in a microservice-ready, clean-architecture way, not just RuntimeException.
+That’s completely normal 👍
+Maven does NOT create settings.xml by default. You have to create it manually.
 
-Below is the complete exception design, integrated cleanly into the email microservice you’re building.
+I’ll guide you step-by-step (bank/corporate-network friendly).
 
 
 ---
 
-✅ Exception Handling – Microservice Ready Design
+✅ Where settings.xml SHOULD Be
 
-🎯 Goals
+Windows (your case)
 
-Clear separation of concerns
+C:\Users\<your-username>\.m2\settings.xml
 
-Meaningful API error responses
+> If .m2 exists but settings.xml doesn’t → create it
 
-No SMTP / JavaMail leakage to controller
-
-Extensible for Kafka / retries later
 
 
 
 ---
 
-1️⃣ Exception Folder Structure
+✅ Step-by-Step: Create settings.xml
 
-exception
-├── EmailSendException.java
-├── AttachmentProcessingException.java
-├── ErrorResponse.java
-└── GlobalExceptionHandler.java
+1️⃣ Go to .m2 directory
+
+Press Win + R
+
+Paste:
+
+%USERPROFILE%\.m2
+
+Press Enter
 
 
----
-
-2️⃣ Custom Exception – Email Failure
-
-EmailSendException.java
-
-package com.example.email.exception;
-
-public class EmailSendException extends RuntimeException {
-
-    public EmailSendException(String message) {
-        super(message);
-    }
-
-    public EmailSendException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
+If .m2 folder does not exist, create it manually.
 
 
 ---
 
-3️⃣ Custom Exception – Attachment Failure
+2️⃣ Create the file
 
-AttachmentProcessingException.java
+Right-click → New → Text Document
 
-package com.example.email.exception;
+Rename to:
 
-public class AttachmentProcessingException extends RuntimeException {
+settings.xml
 
-    public AttachmentProcessingException(String message) {
-        super(message);
-    }
+⚠️ Make sure it is NOT settings.xml.txt
 
-    public AttachmentProcessingException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
 
 
 ---
 
-4️⃣ Error Response Model (Standardized)
+3️⃣ Open settings.xml and Paste This (Minimal Working)
 
-ErrorResponse.java
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
 
-package com.example.email.exception;
+    <!-- Uncomment proxy section ONLY if your office network needs it -->
+    <!--
+    <proxies>
+        <proxy>
+            <id>corp-proxy</id>
+            <active>true</active>
+            <protocol>http</protocol>
+            <host>YOUR_PROXY_HOST</host>
+            <port>YOUR_PROXY_PORT</port>
+            <nonProxyHosts>localhost|127.0.0.1</nonProxyHosts>
+        </proxy>
+    </proxies>
+    -->
 
-import java.time.LocalDateTime;
+</settings>
 
-public class ErrorResponse {
-
-    private LocalDateTime timestamp;
-    private int status;
-    private String error;
-    private String message;
-    private String path;
-
-    public ErrorResponse(int status, String error, String message, String path) {
-        this.timestamp = LocalDateTime.now();
-        this.status = status;
-        this.error = error;
-        this.message = message;
-        this.path = path;
-    }
-
-    // getters
-    public LocalDateTime getTimestamp() { return timestamp; }
-    public int getStatus() { return status; }
-    public String getError() { return error; }
-    public String getMessage() { return message; }
-    public String getPath() { return path; }
-}
+✅ Save the file.
 
 
 ---
 
-5️⃣ Infrastructure Layer – Throw Proper Exceptions
+🔍 Verify Maven Picks It Up
 
-SmtpEmailSender.java (UPDATED)
+Run in Command Prompt:
 
-package com.example.email.infrastructure.mail;
+mvn help:effective-settings
 
-import com.example.email.domain.EmailMessage;
-import com.example.email.exception.EmailSendException;
-import com.example.email.ports.EmailSenderPort;
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
-import org.springframework.stereotype.Component;
-
-@Component
-public class SmtpEmailSender implements EmailSenderPort {
-
-    private final JavaMailSender mailSender;
-
-    public SmtpEmailSender(JavaMailSender mailSender) {
-        this.mailSender = mailSender;
-    }
-
-    @Override
-    public void send(EmailMessage emailMessage) {
-        try {
-            MimeMessage mimeMessage = mailSender.createMimeMessage();
-            MimeMessageHelper helper =
-                    new MimeMessageHelper(mimeMessage, true, "UTF-8");
-
-            helper.setTo(emailMessage.getTo());
-            helper.setSubject(emailMessage.getSubject());
-            helper.setText(emailMessage.getHtmlBody(), true);
-
-            if (emailMessage.getAttachments() != null) {
-                emailMessage.getAttachments()
-                        .forEach(file -> {
-                            try {
-                                helper.addAttachment(file.getName(), file);
-                            } catch (MessagingException e) {
-                                throw new EmailSendException(
-                                        "Failed to attach file: " + file.getName(), e);
-                            }
-                        });
-            }
-
-            mailSender.send(mimeMessage);
-
-        } catch (MessagingException ex) {
-            throw new EmailSendException("SMTP error while sending email", ex);
-        }
-    }
-}
+If Maven prints settings → ✅ working.
 
 
 ---
 
-6️⃣ Controller – Handle Attachment Errors Properly
+🧪 Now Retry Your Build
 
-EmailController.java (UPDATED)
-
-package com.example.email.api;
-
-import com.example.email.application.EmailApplicationService;
-import com.example.email.exception.AttachmentProcessingException;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
-
-import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
-
-@RestController
-@RequestMapping("/api/v1/email")
-public class EmailController {
-
-    private final EmailApplicationService emailService;
-
-    public EmailController(EmailApplicationService emailService) {
-        this.emailService = emailService;
-    }
-
-    @PostMapping(value = "/send", consumes = "multipart/form-data")
-    public ResponseEntity<String> sendEmail(
-            @RequestParam String to,
-            @RequestParam String subject,
-            @RequestParam String htmlBody,
-            @RequestParam(required = false) MultipartFile[] attachments
-    ) {
-
-        List<File> files = new ArrayList<>();
-
-        try {
-            if (attachments != null) {
-                for (MultipartFile mf : attachments) {
-                    File file = File.createTempFile("attach-", mf.getOriginalFilename());
-                    mf.transferTo(file);
-                    files.add(file);
-                }
-            }
-        } catch (Exception e) {
-            throw new AttachmentProcessingException("Failed to process attachments", e);
-        }
-
-        emailService.sendHtmlEmail(to, subject, htmlBody, files);
-        return ResponseEntity.ok("Email sent successfully");
-    }
-}
+mvn clean install -U
 
 
 ---
 
-7️⃣ Global Exception Handler (VERY IMPORTANT)
+🚨 Important: If Build Still Fails
 
-GlobalExceptionHandler.java
+Check these in order:
 
-package com.example.email.exception;
+✔ 1. Internet test
 
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.RestControllerAdvice;
+Open in browser:
 
-@RestControllerAdvice
-public class GlobalExceptionHandler {
+https://repo.maven.apache.org/maven2
 
-    @ExceptionHandler(EmailSendException.class)
-    public ResponseEntity<ErrorResponse> handleEmailSendException(
-            EmailSendException ex, HttpServletRequest request) {
-
-        ErrorResponse error = new ErrorResponse(
-                HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                "EMAIL_SEND_FAILED",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-
-    @ExceptionHandler(AttachmentProcessingException.class)
-    public ResponseEntity<ErrorResponse> handleAttachmentException(
-            AttachmentProcessingException ex, HttpServletRequest request) {
-
-        ErrorResponse error = new ErrorResponse(
-                HttpStatus.BAD_REQUEST.value(),
-                "ATTACHMENT_PROCESSING_FAILED",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
-    }
-
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGenericException(
-            Exception ex, HttpServletRequest request) {
-
-        ErrorResponse error = new ErrorResponse(
-                HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                "INTERNAL_SERVER_ERROR",
-                "Unexpected error occurred",
-                request.getRequestURI()
-        );
-
-        return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-}
+If this does NOT open, proxy is mandatory.
 
 
 ---
 
-🔍 Example Error Response
+✔ 2. Corporate Proxy (Very Likely at SBI)
 
-{
-  "timestamp": "2025-01-31T15:12:20",
-  "status": 500,
-  "error": "EMAIL_SEND_FAILED",
-  "message": "SMTP error while sending email",
-  "path": "/api/v1/email/send"
-}
+Ask IT team for:
+
+Proxy host
+
+Proxy port
 
 
----
-
-🏆 Why This Is Enterprise-Grade
-
-✔ Clean architecture compliant
-✔ No infra exception leaks
-✔ Structured error response
-✔ Ready for retry/DLQ
-✔ Easily extendable to Kafka
-✔ Matches real banking projects
+Then uncomment proxy section and fill details.
 
 
 ---
 
-👉 Next Logical Enhancements
+✔ 3. Maven Version
 
-Retry + Circuit Breaker (Resilience4j)
+mvn -version
 
-Async email sending
+Expected:
 
-Kafka producer for emails
+Maven 3.8+
 
-Correlation ID + logging
-
-Unit tests for exception flows
+Java 17+
 
 
-If you want, I’ll add retry + Kafka async email flow next 🚀
+
+---
+
+🧠 Why This Happens in Corporate Projects
+
+Banks & enterprises:
+
+Block direct internet
+
+Force internal proxy / Nexus / Artifactory
+
+
+👉 Long-term solution:
+
+Use internal Nexus repo
+
+Configure mirror in settings.xml
+
+
+Example (later stage):
+
+<mirrors>
+  <mirror>
+    <id>nexus</id>
+    <mirrorOf>*</mirrorOf>
+    <url>http://internal-nexus/repository/maven-public/</url>
+  </mirror>
+</mirrors>
+
+
+---
+
+✅ Summary
+
+✔ settings.xml missing → normal
+✔ You created it correctly
+✔ Retry build
+✔ Add proxy only if needed
+
+
+---
+
+If you want, paste:
+
+your pom.xml
+
+your exact Maven error again
+
+
+I’ll fix it line by line for you 👍
